@@ -1,0 +1,113 @@
+name: abc
+
+on:
+  # 每次该 yml 文件被 push 修改后自动运行
+  push:
+    paths:
+      - ".github/workflows/abc.yml"
+
+  # 允许在 GitHub Actions 页面手动启动
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    env:
+      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-x64.zip
+      SERVER_DIR: minecraft-server-ubuntu-22.04-x64
+      FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
+      FRP_VERSION: "0.55.1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip curl ca-certificates jq
+
+      - name: Download and prepare Native Minecraft Server (AOT)
+        run: |
+          set -euxo pipefail
+
+          curl -fL --retry 3 --retry-all-errors -o server.zip "$SERVER_ZIP_URL"
+          unzip -q server.zip
+
+          cd "$SERVER_DIR"
+          chmod 775 native-minecraft-server
+          echo "eula=true" > eula.txt
+
+      - name: Download frpc (frp linux_amd64)
+        run: |
+          set -euxo pipefail
+
+          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
+          FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
+
+          curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
+          tar -xzf "$FRP_TGZ"
+
+          # Put frpc alongside the server for convenience
+          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "${SERVER_DIR}/frpc"
+
+      - name: Fetch frpc.ini (placeholder supported)
+        run: |
+          set -euxo pipefail
+
+          cd "$SERVER_DIR"
+
+          if curl -fsSL --retry 3 --retry-all-errors -o frpc.ini "$FRPC_INI_URL"; then
+            echo "Downloaded frpc.ini from: $FRPC_INI_URL"
+          else
+            echo "WARNING: Failed to download frpc.ini from: $FRPC_INI_URL"
+            echo "Creating a placeholder frpc.ini so the workflow can proceed."
+
+            # NOTE: These lines must stay indented for YAML validity; we strip the indent afterwards.
+            cat > frpc.ini <<'EOF'
+            [common]
+            server_addr = 127.0.0.1
+            server_port = 7000
+
+            # Example: expose minecraft 25565 via tcp proxy
+            [minecraft]
+            type = tcp
+            local_ip = 127.0.0.1
+            local_port = 25565
+            remote_port = 25565
+            EOF
+
+            sed -i 's/^            //' frpc.ini
+          fi
+
+          echo "---- frpc.ini ----"
+          sed -n '1,200p' frpc.ini
+
+      - name: Start frpc in background (nohup)
+        run: |
+          set -euxo pipefail
+
+          cd "$SERVER_DIR"
+
+          # Start frpc in background; write logs to file so we can inspect.
+          nohup ./frpc -c ./frpc.ini > frpc.log 2>&1 &
+
+          # Basic liveness check
+          sleep 2
+          pgrep -fa "./frpc" || (echo "frpc failed to start"; echo "---- frpc.log ----"; tail -n 200 frpc.log; exit 1)
+
+          echo "frpc started."
+          echo "---- frpc.log (tail) ----"
+          tail -n 50 frpc.log || true
+
+      - name: Start native-minecraft-server (foreground)
+        run: |
+          set -euxo pipefail
+          cd "$SERVER_DIR"
+
+          echo "Starting native-minecraft-server..."
+          # Run in foreground so the Actions job stays alive.
+          ./native-minecraft-server
