@@ -11,12 +11,12 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     env:
-      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-arm64.zip
-      SERVER_DIR: minecraft-server-ubuntu-22.04-arm64
+      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-amd64.zip
+      SERVER_DIR: minecraft-server-ubuntu-22.04-amd64
       SERVER_SAVE_7Z_URL: "https://nrt.kmoljklj.top/server.7z"
       FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
       FRP_VERSION: "0.55.1"
@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y unzip curl ca-certificates jq p7zip-full
+          sudo apt-get install -y unzip curl ca-certificates jq p7zip-full openjdk-21-jre
 
       - name: Download and prepare Native Minecraft Server (AOT)
         run: |
@@ -54,14 +54,14 @@ jobs:
         run: |
           set -euxo pipefail
 
-          FRP_TGZ="frp_${FRP_VERSION}_linux_arm64.tar.gz"
+          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
           FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
 
           curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
           tar -xzf "$FRP_TGZ"
 
           # Put frpc alongside the server for convenience
-          install -m 0755 "frp_${FRP_VERSION}_linux_arm64/frpc" "${SERVER_DIR}/frpc"
+          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "${SERVER_DIR}/frpc"
 
       - name: Fetch frpc.ini (placeholder supported)
         run: |
@@ -113,13 +113,16 @@ jobs:
       - name: Start native-minecraft-server (foreground)
         run: |
           set -euxo pipefail
-          cd "$SERVER_DIR"
-
-          echo "Starting native-minecraft-server..."
+          wget -O ./server.jar https://dl.mohistmc.cn:41211/project/mohist/1.20.1/builds/300/download
+          
+          # cd "$SERVER_DIR"
+        
+          # echo "Starting native-minecraft-server..."
           # Run in foreground so the Actions job stays alive.
                     while true; do
-            ./native-minecraft-server --nogui && break
-            echo "native-minecraft-server exited with code $?; retrying immediately..." >&2
+            # ./native-minecraft-server --nogui && break
+            java -jar server.jar
+            # echo "native-minecraft-server exited with code $?; retrying immediately..." >&2
             sleep 1
           done
 
