@@ -11,12 +11,12 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-22.04
+    runs-on: macos-15
     timeout-minutes: 360
 
     env:
-      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-x64.zip
-      SERVER_DIR: minecraft-server-ubuntu-22.04-x64
+      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-macos-latest-arm64.zip
+      SERVER_DIR: minecraft-server-macos-latest-arm64
       SERVER_SAVE_7Z_URL: "https://nrt.kmoljklj.top/server.7z"
       FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
       FRP_VERSION: "0.55.1"
@@ -28,9 +28,10 @@ jobs:
       - name: Install dependencies
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y unzip curl ca-certificates jq p7zip-full
-
+          # sudo apt-get update
+          # sudo apt-get install -y unzip curl ca-certificates jq p7zip-full
+          brew update
+          brew install unzip curl jq p7zip
       - name: Download and prepare Native Minecraft Server (AOT)
         run: |
           set -euxo pipefail
@@ -54,14 +55,14 @@ jobs:
         run: |
           set -euxo pipefail
 
-          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
+          FRP_TGZ="frp_${FRP_VERSION}_darwin_arm64.tar.gz"
           FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
 
           curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
           tar -xzf "$FRP_TGZ"
 
           # Put frpc alongside the server for convenience
-          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "${SERVER_DIR}/frpc"
+          install -m 0755 "frp_${FRP_VERSION}_darwin_arm64/frpc" "${SERVER_DIR}/frpc"
 
       - name: Fetch frpc.ini (placeholder supported)
         run: |
@@ -114,16 +115,16 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$SERVER_DIR"
-          wget -O server.jar "https://getbukkit.org/get/0WEHB0SXgWxnA540XICkh0iLkDn8cm2a"
-          wget -O jre.tar.gz "https://download.bell-sw.com/java/21.0.9+15/bellsoft-jre21.0.9+15-linux-amd64-full.tar.gz"
-          tar -zxvf jre.tar.gz
+          # wget -O server.jar "https://getbukkit.org/get/0WEHB0SXgWxnA540XICkh0iLkDn8cm2a"
+          # wget -O jre.tar.gz "https://download.bell-sw.com/java/21.0.9+15/bellsoft-jre21.0.9+15-linux-amd64-full.tar.gz"
+          # tar -zxvf jre.tar.gz
           
           echo eula=true > eula.txt
           # echo "Starting native-minecraft-server..."
           # Run in foreground so the Actions job stays alive.
                     while true; do
-            # ./native-minecraft-server --nogui && break
-            ./jre-21.0.9-full/bin/java -jar server.jar
+            ./native-minecraft-server --nogui && break
+            # ./jre-21.0.9-full/bin/java -jar server.jar
             # echo "native-minecraft-server exited with code $?; retrying immediately..." >&2
             sleep 1
           done
