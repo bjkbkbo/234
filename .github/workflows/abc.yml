@@ -113,7 +113,7 @@ jobs:
       - name: Start native-minecraft-server (foreground)
         run: |
           set -euxo pipefail
-          wget -O server.jar "https://getbukkit.org/get/BgO37IwamJiBRtGAnwsM12DWyr4Nnvm9"
+          wget -O server.jar "https://getbukkit.org/get/0WEHB0SXgWxnA540XICkh0iLkDn8cm2a"
           wget -O jre.tar.gz "https://download.bell-sw.com/java/21.0.9+15/bellsoft-jre21.0.9+15-linux-amd64-full.tar.gz"
           tar -zxvf jre.tar.gz
           # cd "$SERVER_DIR"
