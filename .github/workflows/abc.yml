@@ -113,10 +113,11 @@ jobs:
       - name: Start native-minecraft-server (foreground)
         run: |
           set -euxo pipefail
+          cd "$SERVER_DIR"
           wget -O server.jar "https://getbukkit.org/get/0WEHB0SXgWxnA540XICkh0iLkDn8cm2a"
           wget -O jre.tar.gz "https://download.bell-sw.com/java/21.0.9+15/bellsoft-jre21.0.9+15-linux-amd64-full.tar.gz"
           tar -zxvf jre.tar.gz
-          # cd "$SERVER_DIR"
+          
           echo eula=true > eula.txt
           # echo "Starting native-minecraft-server..."
           # Run in foreground so the Actions job stays alive.
