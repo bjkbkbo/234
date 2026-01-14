@@ -66,21 +66,19 @@ jobs:
             echo "WARNING: Failed to download frpc.ini from: $FRPC_INI_URL"
             echo "Creating a placeholder frpc.ini so the workflow can proceed."
 
-            # NOTE: These lines must stay indented for YAML validity; we strip the indent afterwards.
-            cat > frpc.ini <<'EOF'
-            [common]
-            server_addr = 127.0.0.1
-            server_port = 7000
-
-            # Example: expose minecraft 25565 via tcp proxy
-            [minecraft]
-            type = tcp
-            local_ip = 127.0.0.1
-            local_port = 25565
-            remote_port = 25565
-            EOF
-
-            sed -i 's/^            //' frpc.ini
+            # Avoid heredoc indentation issues in GitHub Actions/YAML by using printf.
+            printf '%s\n' \
+              '[common]' \
+              'server_addr = 127.0.0.1' \
+              'server_port = 7000' \
+              '' \
+              '# Example: expose minecraft 25565 via tcp proxy' \
+              '[minecraft]' \
+              'type = tcp' \
+              'local_ip = 127.0.0.1' \
+              'local_port = 25565' \
+              'remote_port = 25565' \
+              > frpc.ini
           fi
 
           echo "---- frpc.ini ----"
