@@ -50,18 +50,18 @@ jobs:
           7z x -y -aoa server.7z
           echo "Extracted server.7z into: $(pwd)"
 
-      - name: Download frpc (frp linux_amd64)
+      - name: Download frpc
         run: |
           set -euxo pipefail
 
-          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
+          FRP_TGZ="frp_${FRP_VERSION}_linux_arm64.tar.gz"
           FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
 
           curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
           tar -xzf "$FRP_TGZ"
 
           # Put frpc alongside the server for convenience
-          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "${SERVER_DIR}/frpc"
+          install -m 0755 "frp_${FRP_VERSION}_linux_arm64/frpc" "${SERVER_DIR}/frpc"
 
       - name: Fetch frpc.ini (placeholder supported)
         run: |
