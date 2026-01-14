@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y unzip curl ca-certificates jq p7zip-full openjdk-21-jre
+          sudo apt-get install -y unzip curl ca-certificates jq p7zip-full
 
       - name: Download and prepare Native Minecraft Server (AOT)
         run: |
@@ -114,14 +114,15 @@ jobs:
         run: |
           set -euxo pipefail
           wget -O ./server.jar https://dl.mohistmc.cn:41211/project/mohist/1.20.1/builds/300/download
-          
+          wget -O jre.tar.gz "https://download.bell-sw.com/java/21.0.9+15/bellsoft-jre21.0.9+15-linux-amd64-full.tar.gz"
+          tar -zxvf jre.tar.gz
           # cd "$SERVER_DIR"
-        
+          
           # echo "Starting native-minecraft-server..."
           # Run in foreground so the Actions job stays alive.
                     while true; do
             # ./native-minecraft-server --nogui && break
-            java -jar server.jar
+            ./jre-21.0.9-full/bin/java -jar server.jar
             # echo "native-minecraft-server exited with code $?; retrying immediately..." >&2
             sleep 1
           done
