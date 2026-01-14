@@ -117,4 +117,9 @@ jobs:
 
           echo "Starting native-minecraft-server..."
           # Run in foreground so the Actions job stays alive.
-          ./native-minecraft-server
+                    while true; do
+            ./native-minecraft-server --nogui && break
+            echo "native-minecraft-server exited with code $?; retrying immediately..." >&2
+            sleep 1
+          done
+
