@@ -11,12 +11,12 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
 
     env:
-      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-x64.zip
-      SERVER_DIR: minecraft-server-ubuntu-22.04-x64
+      SERVER_ZIP_URL: https://github.com/urb99Violetipz0dm2f2vBrown/native-minecraft-server/releases/download/v2025.04.23/minecraft-server-ubuntu-22.04-arm64.zip
+      SERVER_DIR: minecraft-server-ubuntu-22.04-arm64
       SERVER_SAVE_7Z_URL: "https://nrt.kmoljklj.top/server.7z"
       FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
       FRP_VERSION: "0.55.1"
