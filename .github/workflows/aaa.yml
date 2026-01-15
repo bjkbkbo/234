@@ -1,7 +1,5 @@
 name: a
-
 on:
-  # 每次该 yml 文件被 push 修改后自动运行
   push:
     paths:
       - ".github/workflows/aaa.yml"
@@ -21,17 +19,16 @@ jobs:
       # 要运行的 Ollama 模型
       OLLAMA_MODEL: "gpt-oss"
 
-      # 将 Ollama 模型存储迁移到更大空间的挂载点（在 GitHub-hosted runner 上通常更宽裕）
+      # 将 Ollama 的数据/模型/临时目录迁移到 /mnt（该分区通常更大）
+      # 说明：
+      # - OLLAMA_MODELS：模型存放目录
+      # - OLLAMA_HOME：Ollama 数据目录（用于避免 ~/.ollama 占满 /dev/root）
+      # - OLLAMA_TMPDIR：拉取/解压过程的临时目录（避免临时文件占满根分区）
       OLLAMA_MODELS: /mnt/ollama/models
+      OLLAMA_HOME: /mnt/ollama
+      OLLAMA_TMPDIR: /mnt/ollama/tmp
 
     steps:
-      - name: Disk usage (before cleanup)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          df -h
-          sudo du -xh -d 2 /usr/share /usr/local /opt 2>/dev/null | sort -h | tail -n 50 || true
-
       - name: Free disk space (remove preinstalled toolchains)
         shell: bash
         run: |
@@ -54,13 +51,20 @@ jobs:
 
           df -h
 
-      - name: Prepare Ollama model dir (on /mnt)
+      - name: Prepare Ollama dirs (on /mnt)
         shell: bash
         run: |
           set -euxo pipefail
-          sudo mkdir -p "$OLLAMA_MODELS"
+
+          # Create dirs on /mnt
+          sudo mkdir -p "$OLLAMA_MODELS" "$OLLAMA_TMPDIR"
           sudo chown -R "$USER":"$USER" /mnt/ollama
-          ls -ld /mnt/ollama /mnt/ollama/models
+
+          # Also make ~/.ollama point to /mnt/ollama to prevent any fallback from filling /dev/root
+          rm -rf "$HOME/.ollama" || true
+          ln -s /mnt/ollama "$HOME/.ollama"
+
+          ls -ld /mnt/ollama /mnt/ollama/models /mnt/ollama/tmp "$HOME/.ollama"
           df -h /mnt || true
 
       - name: Install dependencies
