@@ -1,4 +1,5 @@
-name: aaa
+name: a
+
 on:
   # 每次该 yml 文件被 push 修改后自动运行
   push:
@@ -14,14 +15,54 @@ jobs:
     timeout-minutes: 360
 
     env:
-      # frpc 配置文件下载地址（参考 minecraft-frpc.yml）
       FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
       FRP_VERSION: "0.55.1"
 
       # 要运行的 Ollama 模型
       OLLAMA_MODEL: "gpt-oss"
 
+      # 将 Ollama 模型存储迁移到更大空间的挂载点（在 GitHub-hosted runner 上通常更宽裕）
+      OLLAMA_MODELS: /mnt/ollama/models
+
     steps:
+      - name: Disk usage (before cleanup)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h
+          sudo du -xh -d 2 /usr/share /usr/local /opt 2>/dev/null | sort -h | tail -n 50 || true
+
+      - name: Free disk space (remove preinstalled toolchains)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # These directories are typically huge on ubuntu-latest runners.
+          # Remove what we don't need to make room for large Ollama models.
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/powershell || true
+          sudo rm -rf /usr/local/.ghcup || true
+
+          # Clean package caches
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
+
+          # If docker is present and has images, prune them (safe for this workflow)
+          docker system prune -af || true
+
+          df -h
+
+      - name: Prepare Ollama model dir (on /mnt)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p "$OLLAMA_MODELS"
+          sudo chown -R "$USER":"$USER" /mnt/ollama
+          ls -ld /mnt/ollama /mnt/ollama/models
+          df -h /mnt || true
+
       - name: Install dependencies
         shell: bash
         run: |
