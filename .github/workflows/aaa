@@ -1,0 +1,129 @@
+name: aaa
+on:
+  # 每次该 yml 文件被 push 修改后自动运行
+  push:
+    paths:
+      - ".github/workflows/aaa.yml"
+
+  # 允许在 GitHub Actions 页面手动启动
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      # frpc 配置文件下载地址（参考 minecraft-frpc.yml）
+      FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
+      FRP_VERSION: "0.55.1"
+
+      # 要运行的 Ollama 模型
+      OLLAMA_MODEL: "gpt-oss"
+
+    steps:
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates jq
+
+      - name: Download frpc (frp linux_amd64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
+          FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
+
+          curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
+          tar -xzf "$FRP_TGZ"
+
+          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "./frpc"
+
+      - name: Fetch frpc.ini (placeholder supported)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if curl -fsSL --retry 3 --retry-all-errors -o frpc.ini "$FRPC_INI_URL"; then
+            echo "Downloaded frpc.ini from: $FRPC_INI_URL"
+          else
+            echo "WARNING: Failed to download frpc.ini from: $FRPC_INI_URL"
+            echo "Creating a placeholder frpc.ini so the workflow can proceed."
+
+            # Avoid heredoc indentation issues in GitHub Actions/YAML by using printf.
+            printf '%s\n' \
+              '[common]' \
+              'server_addr = 127.0.0.1' \
+              'server_port = 7000' \
+              '' \
+              '# Example placeholder' \
+              '[example]' \
+              'type = tcp' \
+              'local_ip = 127.0.0.1' \
+              'local_port = 11434' \
+              'remote_port = 11434' \
+              > frpc.ini
+          fi
+
+          echo "---- frpc.ini ----"
+          sed -n '1,200p' frpc.ini
+
+      - name: Start frpc in background (nohup)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          nohup ./frpc -c ./frpc.ini > frpc.log 2>&1 &
+
+          # Basic liveness check
+          sleep 2
+          pgrep -fa "./frpc" || (echo "frpc failed to start"; echo "---- frpc.log ----"; tail -n 200 frpc.log; exit 1)
+
+          echo "frpc started."
+          echo "---- frpc.log (tail) ----"
+          tail -n 50 frpc.log || true
+
+      - name: Install Ollama
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Official install script
+          curl -fsSL https://ollama.com/install.sh | sudo -E sh
+
+          # Show version for debugging
+          ollama --version
+
+      - name: Start Ollama server in background
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Start ollama server
+          nohup ollama serve > ollama.log 2>&1 &
+
+          # Wait until the API is reachable
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:11434/api/tags > /dev/null; then
+              echo "Ollama is up."
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:11434/api/tags | jq '.' || true
+          echo "---- ollama.log (tail) ----"
+          tail -n 100 ollama.log || true
+
+      - name: Pull and run model (gpt-oss)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Ensure model exists (pull) then run a quick prompt.
+          # Note: `ollama run` is interactive by default; piping input makes it non-interactive.
+          ollama pull "$OLLAMA_MODEL"
+
+          printf '%s\n' "Say hello in one short sentence." | ollama run "$OLLAMA_MODEL"
