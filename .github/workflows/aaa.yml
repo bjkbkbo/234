@@ -1,5 +1,7 @@
 name: a
+
 on:
+  # 每次该 yml 文件被 push 修改后自动运行
   push:
     paths:
       - ".github/workflows/aaa.yml"
@@ -11,6 +13,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+
 
     env:
       FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
