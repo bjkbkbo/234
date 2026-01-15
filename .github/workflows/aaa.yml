@@ -1,4 +1,4 @@
-name: a1a
+name: a
 
 on:
   # 每次该 yml 文件被 push 修改后自动运行
@@ -171,6 +171,45 @@ jobs:
         run: |
           set -euxo pipefail
           ollama pull "$OLLAMA_MODEL"
+
+      - name: Test OpenAI-compatible endpoint (local + public)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Request payload (OpenAI-compatible)
+          BODY="$(cat <<'JSON'
+          {
+            "messages": [
+              { "role": "user", "content": "echo hi" }
+            ],
+            "model": "gpt-oss:latest"
+          }
+          JSON
+          )"
+
+          test_endpoint () {
+            local url="$1"
+            echo "Testing: $url"
+
+            # Retry to tolerate cold start / model warmup.
+            # Fail fast on HTTP errors, and also assert response looks like OpenAI chat completion JSON.
+            resp="$(
+              curl -fsS --retry 10 --retry-delay 3 --retry-all-errors \
+                -X POST "$url" \
+                --header "Content-Type: application/json" \
+                --data "$BODY"
+            )"
+
+            echo "$resp" | jq -e '.choices[0].message.content' >/dev/null
+            echo "OK: $url"
+          }
+
+          # 1) Local endpoint (Ollama on runner)
+          test_endpoint "http://127.0.0.1:11434/v1/chat/completions"
+
+          # 2) Public endpoint (your exposed IP)
+          test_endpoint "http://193.32.149.153:11434/v1/chat/completions"
 
       - name: Run model in background (keep session online)
         shell: bash
