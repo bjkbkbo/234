@@ -1,0 +1,107 @@
+name: test
+
+on:
+  push:
+    paths:
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Cloudflared
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $cloudflaredUrl = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+          curl.exe -fL --retry 3 --retry-all-errors -o cloudflared.exe $cloudflaredUrl
+
+          .\cloudflared.exe --version
+
+      - name: Enable RDP and configure Administrator
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # 启用远程桌面
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # 启用 Administrator 账户（如果已禁用）
+          $admin = Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+          if ($admin) {
+            if ($admin.Enabled -eq $false) {
+              Enable-LocalUser -Name "Administrator"
+              Write-Host "Administrator enabled."
+            }
+          } else {
+            Write-Host "Administrator user not found (maybe renamed)."
+          }
+
+          # 设置 Administrator 密码（仅用于测试）
+          net user Administrator test 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Note: net user may fail if Administrator is renamed; ignoring."
+          }
+
+          # 确认 RDP 服务已启动
+          Start-Service TermService -ErrorAction SilentlyContinue
+          Get-Service TermService | Select-Object Name, Status
+
+      - name: Start Cloudflared tunnel (RDP 3389)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # 生成随机隧道名
+          $tunnelName = "rdp-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+
+          # 启动隧道（后台运行）
+          Start-Process -FilePath ".\cloudflared.exe" `
+            -ArgumentList "tunnel", "--url", "tcp://localhost:3389", "--name", $tunnelName `
+            -NoNewWindow `
+            -RedirectStandardOutput "cloudflared.out.log" `
+            -RedirectStandardError "cloudflared.err.log"
+
+          Start-Sleep -Seconds 5
+
+          # 检查进程
+          $p = Get-Process cloudflared -ErrorAction SilentlyContinue
+          if (-not $p) {
+            Write-Host "Cloudflared failed to start"
+            if (Test-Path cloudflared.out.log) { Get-Content cloudflared.out.log -Tail 200 }
+            if (Test-Path cloudflared.err.log) { Get-Content cloudflared.err.log -Tail 200 }
+            exit 1
+          }
+
+          Write-Host "Cloudflared tunnel started (pid=$($p.Id), name=$tunnelName)."
+          Write-Host "Tunnel logs: cloudflared.out.log / cloudflared.err.log"
+
+          # 输出连接提示（需要用户手动运行 cloudflared access 或使用 dashboard）
+          Write-Host "`n=== 连接说明 ==="
+          Write-Host "1. 在另一台机器安装 cloudflared"
+          Write-Host "2. 运行: cloudflared access tcp --hostname $tunnelName.cfargotunnel.com --url localhost:3389"
+          Write-Host "3. 用 RDP 客户端连接 localhost:3389 (或指定端口)"
+          Write-Host "================`n"
+
+      - name: Keep workflow alive (wait for manual stop)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Workflow will stay alive for up to 6 hours."
+          Write-Host "Press Ctrl+C in the runner terminal to stop early."
+          Write-Host "RDP is accessible via Cloudflared tunnel."
+
+          # 简单心跳，防止超
