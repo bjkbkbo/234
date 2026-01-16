@@ -1,4 +1,4 @@
-name: q
+name: 1
 
 on:
   push:
@@ -93,7 +93,7 @@ jobs:
 
           function Get-ExpectedSha256FromFile([string]$shaFilePath) {
             $content = (Get-Content -Raw $shaFilePath).Trim()
-            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty sha256 file: $shaFilePath" }
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty sha256 file: ${shaFilePath}" }
 
             # Common formats:
             # 1) "<hash>"
