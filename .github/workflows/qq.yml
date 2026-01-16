@@ -120,8 +120,12 @@ jobs:
           $downloads += [pscustomobject]@{ Url = $env:VIRTIO_ISO_URL; Out = $env:VIRTIO_ISO_PATH }
 
           # 并发下载（PowerShell 7 支持 ForEach-Object -Parallel）
-          $throttle = 6
+          # 说明：并发 + 大文件时偶发网络抖动会导致 curl 非 0 退出；这里增加“外层重试”并降低并发度。
+          $throttle = 3
           $downloads | ForEach-Object -Parallel {
+            Set-StrictMode -Version Latest
+            $ErrorActionPreference = "Stop"
+
             $u = $_.Url
             $o = $_.Out
 
@@ -130,8 +134,31 @@ jobs:
               return
             }
 
-            Write-Host "Downloading $u -> $o"
-            curl.exe -fL --retry 3 --retry-all-errors -o $o $u
+            $maxAttempts = 5
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              Write-Host "Downloading ($attempt/$maxAttempts) $u -> $o"
+
+              # -sS: 静默但保留错误；--retry-*：curl 内置重试；外层循环兜底重试
+              & curl.exe -fL -sS `
+                --retry 10 `
+                --retry-all-errors `
+                --retry-connrefused `
+                --retry-delay 2 `
+                --retry-max-time 0 `
+                -o $o `
+                $u
+
+              if ($LASTEXITCODE -eq 0 -and (Test-Path $o)) {
+                break
+              }
+
+              if (Test-Path $o) { Remove-Item -Force $o -ErrorAction SilentlyContinue }
+              Start-Sleep -Seconds ([Math]::Min(10, 2 * $attempt))
+            }
+
+            if (!(Test-Path $o)) {
+              throw "Download failed after retries: $u -> $o"
+            }
           } -ThrottleLimit $throttle
 
           # 校验每个分卷
