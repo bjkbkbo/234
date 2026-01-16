@@ -48,7 +48,36 @@ jobs:
           # 7z 在 runner 上一般可用；若你需要强制安装，可取消注释：
           # choco install -y 7zip
 
-          qemu-system-x86_64 --version
+          # Chocolatey 的 qemu 包有时不会自动加入 PATH，因此这里做一次“定位 exe + 加入 PATH”。
+          $qemuCmd = Get-Command qemu-system-x86_64.exe -ErrorAction SilentlyContinue
+
+          if (-not $qemuCmd) {
+            $candidateRoots = @(
+              "C:\Program Files\qemu",
+              "C:\Program Files (x86)\qemu",
+              "C:\ProgramData\chocolatey\bin",
+              "C:\ProgramData\chocolatey\lib"
+            ) | Where-Object { Test-Path $_ }
+
+            $qemuExe = $null
+            foreach ($root in $candidateRoots) {
+              $hit = Get-ChildItem -Path $root -Recurse -Filter "qemu-system-x86_64.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($hit) { $qemuExe = $hit.FullName; break }
+            }
+
+            if (-not $qemuExe) {
+              throw "qemu-system-x86_64.exe not found after choco install. Check chocolatey logs."
+            }
+
+            $qemuDir = Split-Path -Parent $qemuExe
+            Add-Content -Path $env:GITHUB_PATH -Value $qemuDir
+            $qemuCmd = Get-Command $qemuExe
+          }
+
+          # 给后续 step 使用（避免依赖 PATH）
+          "QEMU_EXE=$($qemuCmd.Source)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          & $qemuCmd.Source --version
           7z | Out-Null
 
       - name: Download Windows10 split 7z parts (+ sha256 verify)
@@ -240,4 +269,10 @@ jobs:
           Write-Host "qemu-system-x86_64 $($args -join ' ')"
           Write-Host "VNC TCP port should be: $((5900 + $vncDisplay))"
 
-          & qemu-system-x86_64 @args
+          $qemuExe = $env:QEMU_EXE
+          if ([string]::IsNullOrWhiteSpace($qemuExe) -or !(Test-Path $qemuExe)) {
+            # 兜底：如果环境变量没写入成功，尝试直接解析
+            $qemuExe = (Get-Command qemu-system-x86_64.exe -ErrorAction Stop).Source
+          }
+
+          & $qemuExe @args
