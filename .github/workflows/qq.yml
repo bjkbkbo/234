@@ -1,4 +1,4 @@
-name: 1
+name: q
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
 
     env:
       # 占位：分卷下载基址（最终将拼成：${BASE_URL}/windows10.7z.001 ... .018）
-      BASE_URL: "https://r2.kmoljklj.top//files/qemu/x64/"
+      BASE_URL: "https://r2.kmoljklj.top/files/qemu/x64"
       PART_BASENAME: "windows10.7z"
       PART_FROM: "001"
       PART_TO: "018"
@@ -215,18 +215,26 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
 
-          Start-Process -FilePath ".\\frpc.exe" -ArgumentList "-c", ".\\frpc.ini" -NoNewWindow -RedirectStandardOutput "frpc.log" -RedirectStandardError "frpc.log"
+          # 注意：RedirectStandardOutput 与 RedirectStandardError 不能指向同一个文件
+          Start-Process `
+            -FilePath ".\\frpc.exe" `
+            -ArgumentList "-c", ".\\frpc.ini" `
+            -NoNewWindow `
+            -RedirectStandardOutput "frpc.out.log" `
+            -RedirectStandardError "frpc.err.log"
 
           Start-Sleep -Seconds 2
           $p = Get-Process frpc -ErrorAction SilentlyContinue
           if (-not $p) {
             Write-Host "frpc failed to start"
-            if (Test-Path frpc.log) { Get-Content frpc.log -Tail 200 }
+            if (Test-Path frpc.out.log) { Get-Content frpc.out.log -Tail 200 }
+            if (Test-Path frpc.err.log) { Get-Content frpc.err.log -Tail 200 }
             exit 1
           }
 
           Write-Host "frpc started (pid=$($p.Id))."
-          if (Test-Path frpc.log) { Get-Content frpc.log -Tail 50 }
+          if (Test-Path frpc.out.log) { Get-Content frpc.out.log -Tail 50 }
+          if (Test-Path frpc.err.log) { Get-Content frpc.err.log -Tail 50 }
 
       - name: Run QEMU with VNC (foreground)
         shell: pwsh
