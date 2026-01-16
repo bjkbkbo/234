@@ -1,0 +1,149 @@
+name: b
+
+on:
+  # 每次该 yml 文件被 push 修改后自动运行
+  push:
+    paths:
+      - ".github/workflows/bbb.yml"
+
+  # 允许在 GitHub Actions 页面手动启动
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      SERVER_DIR: minecraft-server
+      SERVER_JAR_URL: "https://getbukkit.org/get/0WEHB0SXgWxnA540XICkh0iLkDn8cm2a"
+
+      # Optional: download config/save before first start (keep same behavior as AOT workflow)
+      SERVER_PROPERTIES_URL: "https://nrt.kmoljklj.top/server.properties"
+      SERVER_SAVE_7Z_URL: "https://nrt.kmoljklj.top/server.7z"
+
+      # frpc (frp)
+      FRPC_INI_URL: "https://nrt.kmoljklj.top/frpc/frpc.ini"
+      FRP_VERSION: "0.55.1"
+
+      # JVM tuning (override in workflow dispatch / repo variables if needed)
+      JAVA_XMS: "1G"
+      JAVA_XMX: "2G"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl wget tar p7zip-full jq
+          java -version
+          wget --version | head -n 1
+
+      - name: Download and prepare Minecraft server (Java)
+        run: |
+          set -euxo pipefail
+
+          mkdir -p "$SERVER_DIR"
+          cd "$SERVER_DIR"
+
+          # Required by your task: download server.jar with wget
+          wget -O server.jar "$SERVER_JAR_URL"
+
+          # Accept EULA
+          echo "eula=true" > eula.txt
+
+          # Optional: download server.properties before starting server
+          if curl -fsSL --retry 3 --retry-all-errors -o server.properties "$SERVER_PROPERTIES_URL"; then
+            echo "Downloaded server.properties from: $SERVER_PROPERTIES_URL"
+          else
+            echo "WARNING: Failed to download server.properties from: $SERVER_PROPERTIES_URL"
+          fi
+
+          # Optional: download & extract world/save before starting server
+          if curl -fsSL --retry 3 --retry-all-errors -o server.7z "$SERVER_SAVE_7Z_URL"; then
+            echo "Downloaded server.7z from: $SERVER_SAVE_7Z_URL"
+            7z x -y -aoa server.7z
+            echo "Extracted server.7z into: $(pwd)"
+          else
+            echo "WARNING: Failed to download server.7z from: $SERVER_SAVE_7Z_URL"
+          fi
+
+      - name: Download frpc (frp linux_amd64)
+        run: |
+          set -euxo pipefail
+
+          FRP_TGZ="frp_${FRP_VERSION}_linux_amd64.tar.gz"
+          FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_TGZ}"
+
+          curl -fL --retry 3 --retry-all-errors -o "$FRP_TGZ" "$FRP_URL"
+          tar -xzf "$FRP_TGZ"
+
+          install -m 0755 "frp_${FRP_VERSION}_linux_amd64/frpc" "${SERVER_DIR}/frpc"
+
+      - name: Fetch frpc.ini (placeholder supported)
+        run: |
+          set -euxo pipefail
+
+          cd "$SERVER_DIR"
+
+          if curl -fsSL --retry 3 --retry-all-errors -o frpc.ini "$FRPC_INI_URL"; then
+            echo "Downloaded frpc.ini from: $FRPC_INI_URL"
+          else
+            echo "WARNING: Failed to download frpc.ini from: $FRPC_INI_URL"
+            echo "Creating a placeholder frpc.ini so the workflow can proceed."
+
+            printf '%s\n' \
+              '[common]' \
+              'server_addr = 127.0.0.1' \
+              'server_port = 7000' \
+              '' \
+              '# Example: expose minecraft 25565 via tcp proxy' \
+              '[minecraft]' \
+              'type = tcp' \
+              'local_ip = 127.0.0.1' \
+              'local_port = 25565' \
+              'remote_port = 25565' \
+              > frpc.ini
+          fi
+
+          echo "---- frpc.ini ----"
+          sed -n '1,200p' frpc.ini
+
+      - name: Start frpc in background (nohup)
+        run: |
+          set -euxo pipefail
+
+          cd "$SERVER_DIR"
+
+          nohup ./frpc -c ./frpc.ini > frpc.log 2>&1 &
+
+          sleep 2
+          pgrep -fa "./frpc" || (echo "frpc failed to start"; echo "---- frpc.log ----"; tail -n 200 frpc.log; exit 1)
+
+          echo "frpc started."
+          echo "---- frpc.log (tail) ----"
+          tail -n 50 frpc.log || true
+
+      - name: Start Minecraft server (java -jar) in foreground
+        run: |
+          set -euxo pipefail
+          cd "$SERVER_DIR"
+
+          echo "Starting java -jar server.jar --nogui (auto-retry on failure)..."
+
+          # Keep the job alive by running the server in foreground.
+          while true; do
+            java -Xms"$JAVA_XMS" -Xmx"$JAVA_XMX" -jar server.jar --nogui && break
+            echo "Minecraft server exited with code $?; retrying immediately..." >&2
+            sleep 1
+          done
