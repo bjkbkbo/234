@@ -1,0 +1,243 @@
+name: q
+
+on:
+  push:
+    paths:
+      - ".github/workflows/qq.yml"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      # 占位：分卷下载基址（最终将拼成：${BASE_URL}/windows10.7z.001 ... .018）
+      BASE_URL: "https://hk.kmoljklj.top"
+      PART_BASENAME: "windows10.7z"
+      PART_FROM: "001"
+      PART_TO: "018"
+
+      # 解压后应得到的 qcow2 文件名
+      QCOW2_FILE: "win10.qcow2"
+
+      # QEMU VNC：display N => TCP 5900+N（例如 1 => 5901）
+      VNC_DISPLAY: "1"
+      VM_MEMORY_MB: "4096"
+
+      # virtio ISO（占位；如需可改成下载 URL 或放到仓库里）
+      VIRTIO_ISO_PATH: "..\\virtio-win.iso"
+
+      # frp/frpc
+      FRP_VERSION: "0.55.1"
+      FRPC_INI_URL: "https://hk.kmoljklj.top/frpc/frpc.ini"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (QEMU)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          # 安装 qemu（windows-latest 默认不保证存在）
+          choco install -y qemu
+
+          # 7z 在 runner 上一般可用；若你需要强制安装，可取消注释：
+          # choco install -y 7zip
+
+          qemu-system-x86_64 --version
+          7z | Out-Null
+
+      - name: Download Windows10 split 7z parts (+ sha256 verify)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $baseUrl = "${env:BASE_URL}".TrimEnd("/")
+          $baseName = $env:PART_BASENAME
+          $from = [int]$env:PART_FROM
+          $to = [int]$env:PART_TO
+
+          function Get-ExpectedSha256FromFile([string]$shaFilePath) {
+            $content = (Get-Content -Raw $shaFilePath).Trim()
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty sha256 file: $shaFilePath" }
+
+            # Common formats:
+            # 1) "<hash>"
+            # 2) "<hash> <filename>"
+            # 3) "<hash> *<filename>"
+            $token = ($content -split "\s+")[0].Trim()
+            if ($token -notmatch "^[0-9a-fA-F]{64}$") { throw "Invalid sha256 in $shaFilePath: $token" }
+            return $token.ToLowerInvariant()
+          }
+
+          for ($i = $from; $i -le $to; $i++) {
+            $part = "{0:D3}" -f $i
+            $fileName = "$baseName.$part"
+            $url = "$baseUrl/$fileName"
+
+            $shaFile = "$fileName.sha256"
+            $shaUrl = "$baseUrl/$shaFile"
+
+            Write-Host "Downloading $url -> $fileName"
+            curl.exe -fL --retry 3 --retry-all-errors -o $fileName $url
+
+            Write-Host "Downloading $shaUrl -> $shaFile"
+            curl.exe -fL --retry 3 --retry-all-errors -o $shaFile $shaUrl
+
+            $expected = Get-ExpectedSha256FromFile $shaFile
+            $actual = (Get-FileHash -Algorithm SHA256 $fileName).Hash.ToLowerInvariant()
+
+            if ($actual -ne $expected) {
+              throw "SHA256 mismatch for $fileName. expected=$expected actual=$actual"
+            }
+
+            Write-Host "SHA256 OK: $fileName"
+          }
+
+          Write-Host "Downloaded and verified parts:"
+          Get-ChildItem "$baseName.*" | Sort-Object Name | Select-Object -ExpandProperty Name
+
+      - name: Extract win10.qcow2 (from .001)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $firstPart = "$($env:PART_BASENAME).001"
+          if (!(Test-Path $firstPart)) {
+            throw "Missing $firstPart"
+          }
+
+          # 7z 会自动读取后续分卷 .002 .003 ...
+          7z x -y $firstPart
+
+          if (!(Test-Path $env:QCOW2_FILE)) {
+            Write-Host "Workspace after extraction:"
+            Get-ChildItem -Force
+            throw "Expected qcow2 not found: $($env:QCOW2_FILE)"
+          }
+
+      - name: Download frpc (windows_amd64)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $ver = $env:FRP_VERSION
+          $zip = "frp_${ver}_windows_amd64.zip"
+          $url = "https://github.com/fatedier/frp/releases/download/v${ver}/${zip}"
+
+          curl.exe -fL --retry 3 --retry-all-errors -o $zip $url
+          7z x -y $zip | Out-Null
+
+          $dir = "frp_${ver}_windows_amd64"
+          if (!(Test-Path $dir)) { throw "Missing extracted directory: $dir" }
+
+          Copy-Item "$dir\\frpc.exe" ".\\frpc.exe" -Force
+          .\\frpc.exe -v
+
+      - name: Fetch frpc.ini (placeholder supported)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $url = $env:FRPC_INI_URL
+          $ok = $true
+
+          try {
+            curl.exe -fL --retry 3 --retry-all-errors -o frpc.ini $url
+          } catch {
+            $ok = $false
+          }
+
+          if (-not $ok) {
+            Write-Host "WARNING: Failed to download frpc.ini from: $url"
+
+            # 用数组逐行写入，避免 YAML block scalar + PowerShell here-string 造成解析错误
+            $lines = @(
+              "[common]",
+              "server_addr = 127.0.0.1",
+              "server_port = 7000",
+              "",
+              "# 示例：把本机 VNC 5901 暴露出去（按你的 frps 配置修改）",
+              "[vnc]",
+              "type = tcp",
+              "local_ip = 127.0.0.1",
+              "local_port = 5901",
+              "remote_port = 5901"
+            )
+            $lines | Set-Content -Encoding ASCII frpc.ini
+          } else {
+            Write-Host "Downloaded frpc.ini from: $url"
+          }
+
+          Write-Host "---- frpc.ini ----"
+          Get-Content frpc.ini | Select-Object -First 200
+
+      - name: Start frpc in background
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          Start-Process -FilePath ".\\frpc.exe" -ArgumentList "-c", ".\\frpc.ini" -NoNewWindow -RedirectStandardOutput "frpc.log" -RedirectStandardError "frpc.log"
+
+          Start-Sleep -Seconds 2
+          $p = Get-Process frpc -ErrorAction SilentlyContinue
+          if (-not $p) {
+            Write-Host "frpc failed to start"
+            if (Test-Path frpc.log) { Get-Content frpc.log -Tail 200 }
+            exit 1
+          }
+
+          Write-Host "frpc started (pid=$($p.Id))."
+          if (Test-Path frpc.log) { Get-Content frpc.log -Tail 50 }
+
+      - name: Run QEMU with VNC (foreground)
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $qcow2 = $env:QCOW2_FILE
+          $vncDisplay = [int]$env:VNC_DISPLAY
+          $mem = $env:VM_MEMORY_MB
+          $smp = [Environment]::ProcessorCount
+
+          $virtioIso = $env:VIRTIO_ISO_PATH
+
+          # 说明：
+          # - GitHub Hosted Runner 不保证支持/启用 WHPX；但按你的要求保留 -accel whpx
+          # - VNC: 0.0.0.0:<display> => tcp 5900+display（例 display=1 => 5901）
+          #
+          # 这里把你给的命令尽量原样搬过来（其中 install drive 未指定文件，仍按“占位”保留）
+          $args = @(
+            "-accel", "whpx",
+            "-cpu", "Westmere",
+            "-smp", "$smp",
+            "-machine", "q35,mem-merge=off",
+            "-m", "$mem",
+            "-drive", "file=$qcow2,format=qcow2,if=ide,cache=writeback",
+            "-device", "qemu-xhci",
+            "-device", "usb-kbd",
+            "-device", "usb-tablet",
+            "-device", "usb-storage,drive=install",
+            "-drive", "if=none,id=virtio,format=raw,media=cdrom,file=$virtioIso",
+            "-device", "usb-storage,drive=virtio",
+            "-net", "nic",
+            "-net", "user",
+            "-display", "none",
+            "-vnc", "0.0.0.0:$vncDisplay"
+          )
+
+          Write-Host "Starting QEMU:"
+          Write-Host "qemu-system-x86_64 $($args -join ' ')"
+          Write-Host "VNC TCP port should be: $((5900 + $vncDisplay))"
+
+          & qemu-system-x86_64 @args
