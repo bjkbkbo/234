@@ -49,12 +49,17 @@ jobs:
               Write-Host "Enabled $adminName."
             }
 
-            # 设置密码
-            net user $adminName test 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "Password set for $adminName."
+            # 设置密码（使用 PowerShell cmdlet 避免 net user 失败）
+            $securePass = ConvertTo-SecureString "test" -AsPlainText -Force
+            Set-LocalUser -Name $adminName -Password $securePass -ErrorAction SilentlyContinue
+            if ($?) {
+              Write-Host "Password set for $adminName via Set-LocalUser."
             } else {
-              Write-Host "Note: net user failed (maybe password policy)."
+              Write-Host "Note: Set-LocalUser failed (maybe password policy). Trying net user as fallback."
+              net user $adminName test 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "Password set via net user."
+              }
             }
           } else {
             Write-Host "Built-in Administrator not found (unexpected). Creating a new local admin."
@@ -69,7 +74,7 @@ jobs:
           Start-Service TermService -ErrorAction SilentlyContinue
           Get-Service TermService | Select-Object Name, Status
 
-      - name: Start Cloudflared tunnel (RDP 3389)
+      - name: Start Cloudflared tunnel (RDP 3389) and print tunnel info
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -78,6 +83,10 @@ jobs:
           # 生成随机隧道名
           $tunnelName = "rdp-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 
+          # 先运行一次 cloudflared tunnel info 查看现有隧道（可选）
+          Write-Host "Existing tunnels (if any):"
+          .\cloudflared.exe tunnel list 2>&1 | Out-Host
+
           # 启动隧道（后台运行）
           Start-Process -FilePath ".\cloudflared.exe" `
             -ArgumentList "tunnel", "--url", "tcp://localhost:3389", "--name", $tunnelName `
@@ -85,7 +94,7 @@ jobs:
             -RedirectStandardOutput "cloudflared.out.log" `
             -RedirectStandardError "cloudflared.err.log"
 
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 8
 
           # 检查进程
           $p = Get-Process cloudflared -ErrorAction SilentlyContinue
@@ -98,6 +107,10 @@ jobs:
 
           Write-Host "Cloudflared tunnel started (pid=$($p.Id), name=$tunnelName)."
           Write-Host "Tunnel logs: cloudflared.out.log / cloudflared.err.log"
+
+          # 尝试获取隧道详细信息（需要 cloudflared 已认证）
+          Write-Host "`n=== 隧道信息 ==="
+          .\cloudflared.exe tunnel info --name $tunnelName 2>&1 | Out-Host
 
           # 输出连接提示（需要用户手动运行 cloudflared access 或使用 dashboard）
           Write-Host "`n=== 连接说明 ==="
