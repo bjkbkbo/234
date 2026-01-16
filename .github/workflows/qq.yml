@@ -120,25 +120,67 @@ jobs:
           $downloads += [pscustomobject]@{ Url = $env:VIRTIO_ISO_URL; Out = $env:VIRTIO_ISO_PATH }
 
           # 并发下载（PowerShell 7 支持 ForEach-Object -Parallel）
-          # 说明：并发 + 大文件时偶发网络抖动会导致 curl 非 0 退出；这里增加“外层重试”并降低并发度。
+          # 说明：并发 + 大文件在 runner 上偶发会有某个 curl 直接 exit 1（瞬断/限流/HTTP2 bug 等）。
+          # 这里采用“并发尝试 + 自动降级补齐（串行重试）”，保证整体稳定。
           $throttle = 3
-          $downloads | ForEach-Object -Parallel {
-            Set-StrictMode -Version Latest
-            $ErrorActionPreference = "Stop"
 
-            $u = $_.Url
-            $o = $_.Out
+          $parallelFailed = $false
+          try {
+            $downloads | ForEach-Object -Parallel {
+              Set-StrictMode -Version Latest
+              $ErrorActionPreference = "Stop"
 
-            if (Test-Path $o) {
-              Write-Host "Skip (exists): $o"
-              return
-            }
+              $u = $_.Url
+              $o = $_.Out
 
-            $maxAttempts = 5
+              if (Test-Path $o) {
+                Write-Host "Skip (exists): $o"
+                return
+              }
+
+              $maxAttempts = 4
+              for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                Write-Host "Downloading ($attempt/$maxAttempts) $u -> $o"
+
+                # 外层循环兜底重试；--retry-all-errors 处理 5xx/网络抖动
+                & curl.exe -fL -sS `
+                  --retry 6 `
+                  --retry-all-errors `
+                  --retry-connrefused `
+                  --retry-delay 2 `
+                  --retry-max-time 0 `
+                  -o $o `
+                  $u
+
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $o)) {
+                  break
+                }
+
+                if (Test-Path $o) { Remove-Item -Force $o -ErrorAction SilentlyContinue }
+                Start-Sleep -Seconds ([Math]::Min(8, 2 * $attempt))
+              }
+
+              if (!(Test-Path $o)) {
+                throw "Download failed after retries: $u -> $o"
+              }
+            } -ThrottleLimit $throttle
+          } catch {
+            Write-Host "WARNING: parallel download stage failed; will fallback to sequential for missing files."
+            Write-Host $_
+            $parallelFailed = $true
+          }
+
+          # Fallback：把缺失的文件串行补齐（即使并发阶段成功也做一次存在性检查）
+          foreach ($d in $downloads) {
+            $u = $d.Url
+            $o = $d.Out
+
+            if (Test-Path $o) { continue }
+
+            $maxAttempts = 8
             for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-              Write-Host "Downloading ($attempt/$maxAttempts) $u -> $o"
+              Write-Host "Fallback download ($attempt/$maxAttempts) $u -> $o"
 
-              # -sS: 静默但保留错误；--retry-*：curl 内置重试；外层循环兜底重试
               & curl.exe -fL -sS `
                 --retry 10 `
                 --retry-all-errors `
@@ -153,13 +195,17 @@ jobs:
               }
 
               if (Test-Path $o) { Remove-Item -Force $o -ErrorAction SilentlyContinue }
-              Start-Sleep -Seconds ([Math]::Min(10, 2 * $attempt))
+              Start-Sleep -Seconds ([Math]::Min(12, 2 * $attempt))
             }
 
             if (!(Test-Path $o)) {
-              throw "Download failed after retries: $u -> $o"
+              throw "Fallback download still failed: $u -> $o"
             }
-          } -ThrottleLimit $throttle
+          }
+
+          if ($parallelFailed) {
+            Write-Host "Parallel stage had failures, but all files were recovered by fallback."
+          }
 
           # 校验每个分卷
           for ($i = $from; $i -le $to; $i++) {
@@ -325,7 +371,9 @@ jobs:
             "-device", "qemu-xhci",
             "-device", "usb-kbd",
             "-device", "usb-tablet",
-            "-device", "usb-storage,drive=install",
+            # 原命令里有：-device usb-storage,drive=install
+            # 但没有提供对应的：-drive if=none,id=install,file=...
+            # 会导致 QEMU 报错 “can't find value 'install'”，因此先移除该占位项。
             "-drive", "if=none,id=virtio,format=raw,media=cdrom,file=$virtioIso",
             "-device", "usb-storage,drive=virtio",
             "-net", "nic",
