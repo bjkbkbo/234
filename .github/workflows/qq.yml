@@ -25,8 +25,9 @@ jobs:
       VNC_DISPLAY: "1"
       VM_MEMORY_MB: "4096"
 
-      # virtio ISO（占位；如需可改成下载 URL 或放到仓库里）
-      VIRTIO_ISO_PATH: "..\\virtio-win.iso"
+      # virtio ISO（下载到工作目录，供 QEMU 挂载）
+      VIRTIO_ISO_URL: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.266-1/virtio-win-0.1.266.iso"
+      VIRTIO_ISO_PATH: ".\\virtio-win-0.1.266.iso"
 
       # frp/frpc
       FRP_VERSION: "0.55.1"
@@ -80,7 +81,7 @@ jobs:
           & $qemuCmd.Source --version
           7z | Out-Null
 
-      - name: Download Windows10 split 7z parts (+ sha256 verify)
+      - name: Download Windows10 split 7z parts (+ sha256 verify) and virtio ISO (async)
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -104,19 +105,43 @@ jobs:
             return $token.ToLowerInvariant()
           }
 
+          # 组装下载任务（分卷 + 同名 sha256 + virtio iso）
+          $downloads = @()
+
           for ($i = $from; $i -le $to; $i++) {
             $part = "{0:D3}" -f $i
             $fileName = "$baseName.$part"
-            $url = "$baseUrl/$fileName"
-
             $shaFile = "$fileName.sha256"
-            $shaUrl = "$baseUrl/$shaFile"
 
-            Write-Host "Downloading $url -> $fileName"
-            curl.exe -fL --retry 3 --retry-all-errors -o $fileName $url
+            $downloads += [pscustomobject]@{ Url = "$baseUrl/$fileName"; Out = $fileName }
+            $downloads += [pscustomobject]@{ Url = "$baseUrl/$shaFile"; Out = $shaFile }
+          }
 
-            Write-Host "Downloading $shaUrl -> $shaFile"
-            curl.exe -fL --retry 3 --retry-all-errors -o $shaFile $shaUrl
+          $downloads += [pscustomobject]@{ Url = $env:VIRTIO_ISO_URL; Out = $env:VIRTIO_ISO_PATH }
+
+          # 并发下载（PowerShell 7 支持 ForEach-Object -Parallel）
+          $throttle = 6
+          $downloads | ForEach-Object -Parallel {
+            $u = $_.Url
+            $o = $_.Out
+
+            if (Test-Path $o) {
+              Write-Host "Skip (exists): $o"
+              return
+            }
+
+            Write-Host "Downloading $u -> $o"
+            curl.exe -fL --retry 3 --retry-all-errors -o $o $u
+          } -ThrottleLimit $throttle
+
+          # 校验每个分卷
+          for ($i = $from; $i -le $to; $i++) {
+            $part = "{0:D3}" -f $i
+            $fileName = "$baseName.$part"
+            $shaFile = "$fileName.sha256"
+
+            if (!(Test-Path $fileName)) { throw "Missing part: $fileName" }
+            if (!(Test-Path $shaFile)) { throw "Missing sha256: $shaFile" }
 
             $expected = Get-ExpectedSha256FromFile $shaFile
             $actual = (Get-FileHash -Algorithm SHA256 $fileName).Hash.ToLowerInvariant()
@@ -128,8 +153,13 @@ jobs:
             Write-Host "SHA256 OK: $fileName"
           }
 
+          if (!(Test-Path $env:VIRTIO_ISO_PATH)) {
+            throw "virtio iso missing: $($env:VIRTIO_ISO_PATH)"
+          }
+
           Write-Host "Downloaded and verified parts:"
           Get-ChildItem "$baseName.*" | Sort-Object Name | Select-Object -ExpandProperty Name
+          Write-Host "virtio iso: $($env:VIRTIO_ISO_PATH)"
 
       - name: Extract win10.qcow2 (from .001)
         shell: pwsh
@@ -248,6 +278,10 @@ jobs:
           $smp = [Environment]::ProcessorCount
 
           $virtioIso = $env:VIRTIO_ISO_PATH
+          if (!(Test-Path $virtioIso)) {
+            throw "virtio iso not found: $virtioIso"
+          }
+          $virtioIso = (Resolve-Path $virtioIso).Path
 
           # 说明：
           # - GitHub Hosted Runner 不保证支持/启用 WHPX；但按你的要求保留 -accel whpx
