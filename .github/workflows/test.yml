@@ -36,21 +36,33 @@ jobs:
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-          # 启用 Administrator 账户（如果已禁用）
-          $admin = Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-          if ($admin) {
-            if ($admin.Enabled -eq $false) {
-              Enable-LocalUser -Name "Administrator"
-              Write-Host "Administrator enabled."
+          # 查找实际的 Administrator 账户（可能被重命名）
+          $adminSid = "S-1-5-21-*-500"
+          $adminUser = Get-LocalUser | Where-Object { $_.SID -like $adminSid } | Select-Object -First 1
+
+          if ($adminUser) {
+            $adminName = $adminUser.Name
+            Write-Host "Found built-in Administrator (SID ends with -500): $adminName"
+
+            if ($adminUser.Enabled -eq $false) {
+              Enable-LocalUser -Name $adminName
+              Write-Host "Enabled $adminName."
+            }
+
+            # 设置密码
+            net user $adminName test 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Password set for $adminName."
+            } else {
+              Write-Host "Note: net user failed (maybe password policy)."
             }
           } else {
-            Write-Host "Administrator user not found (maybe renamed)."
-          }
-
-          # 设置 Administrator 密码（仅用于测试）
-          net user Administrator test 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Note: net user may fail if Administrator is renamed; ignoring."
+            Write-Host "Built-in Administrator not found (unexpected). Creating a new local admin."
+            $newAdmin = "RunnerAdmin"
+            $password = ConvertTo-SecureString "test" -AsPlainText -Force
+            New-LocalUser -Name $newAdmin -Password $password -AccountNeverExpires -PasswordNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member $newAdmin
+            Write-Host "Created new admin: $newAdmin"
           }
 
           # 确认 RDP 服务已启动
@@ -104,4 +116,11 @@ jobs:
           Write-Host "Press Ctrl+C in the runner terminal to stop early."
           Write-Host "RDP is accessible via Cloudflared tunnel."
 
-          # 简单心跳，防止超
+          # 简单心跳，防止超时
+          $start = Get-Date
+          $timeoutMinutes = 360
+          while (((Get-Date) - $start).TotalMinutes -lt $timeoutMinutes) {
+            Write-Host "Still alive - $(Get-Date -Format 'HH:mm:ss')"
+            Start-Sleep -Seconds 30
+          }
+          Write-Host "Timeout reached. Workflow will exit."
