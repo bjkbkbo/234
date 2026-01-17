@@ -12,22 +12,25 @@ jobs:
     timeout-minutes: 360
 
     env:
+      # 将大文件/解压/临时目录迁移到 /mnt（该分区通常更大，避免根分区空间不足）
+      WORKDIR: /mnt/qemu-win10
+
       # 分卷下载基址（最终将拼成：${BASE_URL}/windows10.7z.001 ...）
       BASE_URL: "https://r2.kmoljklj.top/files/qemu/x64"
       PART_BASENAME: "windows10.7z"
       PART_FROM: "001"
       PART_TO: "018"
 
-      # 解压后应得到的 qcow2 文件名
-      QCOW2_FILE: "win10.qcow2"
+      # 解压后应得到的 qcow2 文件名（放到 /mnt）
+      QCOW2_FILE: "/mnt/qemu-win10/win10.qcow2"
 
       # QEMU VNC：display N => TCP 5900+N（例如 1 => 5901）
       VNC_DISPLAY: "1"
       VM_MEMORY_MB: "4096"
 
-      # virtio ISO（下载到工作目录，供 QEMU 挂载）
+      # virtio ISO（下载到 /mnt，供 QEMU 挂载）
       VIRTIO_ISO_URL: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.266-1/virtio-win-0.1.266.iso"
-      VIRTIO_ISO_PATH: "./virtio-win-0.1.266.iso"
+      VIRTIO_ISO_PATH: "/mnt/qemu-win10/virtio-win-0.1.266.iso"
 
       # frp/frpc
       FRP_VERSION: "0.55.1"
@@ -36,6 +39,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free disk space (remove preinstalled toolchains)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # 参考 ollama-frpc.yml：移除体积巨大的预装工具链，给 /mnt 与根分区都腾空间
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/powershell || true
+          sudo rm -rf /usr/local/.ghcup || true
+
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
+
+          docker system prune -af || true
+
+          df -h
+
+      - name: Prepare workdir (on /mnt)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p "$WORKDIR"
+          sudo chown -R "$USER":"$USER" "$WORKDIR"
+          ls -ld "$WORKDIR"
+          df -h /mnt || true
 
       - name: Install dependencies (qemu, 7z, curl, net tools)
         shell: bash
@@ -54,6 +85,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$WORKDIR"
 
           base_url="${BASE_URL%/}"
           base_name="${PART_BASENAME}"
@@ -80,7 +113,7 @@ jobs:
             download_one "${base_url}/${sha}" "$sha"
           done
 
-          # 下载 virtio iso
+          # 下载 virtio iso（到 /mnt）
           download_one "${VIRTIO_ISO_URL}" "${VIRTIO_ISO_PATH}"
 
           # 校验 sha256（兼容："<hash>" 或 "<hash> filename" 或 "<hash> *filename"）
@@ -106,6 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$WORKDIR"
           first="${PART_BASENAME}.001"
           test -f "$first"
           7z x -y "$first"
@@ -116,6 +150,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$WORKDIR"
+
           ver="${FRP_VERSION}"
           tgz="frp_${ver}_linux_amd64.tar.gz"
           url="https://github.com/fatedier/frp/releases/download/v${ver}/${tgz}"
@@ -132,6 +168,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$WORKDIR"
 
           url="${FRPC_INI_URL}"
           if curl -fL --retry 5 --retry-all-errors --retry-delay 2 -o frpc.ini "$url"; then
@@ -161,6 +199,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          cd "$WORKDIR"
+
           # 后台启动
           nohup ./frpc -c ./frpc.ini > frpc.out.log 2> frpc.err.log < /dev/null &
 
@@ -182,6 +222,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          cd "$WORKDIR"
 
           qcow2="${QCOW2_FILE}"
           vnc_display="${VNC_DISPLAY}"
