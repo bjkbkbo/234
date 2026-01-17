@@ -14,7 +14,7 @@ jobs:
     env:
       # 占位：分卷下载基址（最终将拼成：${BASE_URL}/windows10.7z.001 ... .018）
       BASE_URL: "https://r2.kmoljklj.top/files/qemu/x64"
-      PART_BASENAME: "windows10.7z"
+      PART_BASENAME: "win10.7z"
       PART_FROM: "001"
       PART_TO: "018"
 
