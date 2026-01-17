@@ -1,0 +1,223 @@
+name: u
+
+on:
+  push:
+    paths:
+      - ".github/workflows/u.yml"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      # 分卷下载基址（最终将拼成：${BASE_URL}/windows10.7z.001 ...）
+      BASE_URL: "https://r2.kmoljklj.top/files/qemu/x64"
+      PART_BASENAME: "windows10.7z"
+      PART_FROM: "001"
+      PART_TO: "018"
+
+      # 解压后应得到的 qcow2 文件名
+      QCOW2_FILE: "win10.qcow2"
+
+      # QEMU VNC：display N => TCP 5900+N（例如 1 => 5901）
+      VNC_DISPLAY: "1"
+      VM_MEMORY_MB: "4096"
+
+      # virtio ISO（下载到工作目录，供 QEMU 挂载）
+      VIRTIO_ISO_URL: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.266-1/virtio-win-0.1.266.iso"
+      VIRTIO_ISO_PATH: "./virtio-win-0.1.266.iso"
+
+      # frp/frpc
+      FRP_VERSION: "0.55.1"
+      FRPC_INI_URL: "https://hk.kmoljklj.top/frpc/frpc.ini"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (qemu, 7z, curl, net tools)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 qemu-utils \
+            p7zip-full \
+            curl ca-certificates \
+            net-tools iproute2 lsof
+          qemu-system-x86_64 --version
+          7z | head -n 2
+
+      - name: Download Windows10 split 7z parts (+ sha256 verify) and virtio ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_url="${BASE_URL%/}"
+          base_name="${PART_BASENAME}"
+          from=$((10#${PART_FROM}))
+          to=$((10#${PART_TO}))
+
+          download_one() {
+            local url="$1"
+            local out="$2"
+            if [ -f "$out" ]; then
+              echo "Skip (exists): $out"
+              return 0
+            fi
+            echo "Downloading $url -> $out"
+            curl -fL --retry 10 --retry-all-errors --retry-delay 2 -o "$out" "$url"
+          }
+
+          # 下载分卷及 sha
+          for i in $(seq "$from" "$to"); do
+            part="$(printf '%03d' "$i")"
+            file="${base_name}.${part}"
+            sha="${file}.sha256"
+            download_one "${base_url}/${file}" "$file"
+            download_one "${base_url}/${sha}" "$sha"
+          done
+
+          # 下载 virtio iso
+          download_one "${VIRTIO_ISO_URL}" "${VIRTIO_ISO_PATH}"
+
+          # 校验 sha256（兼容："<hash>" 或 "<hash> filename" 或 "<hash> *filename"）
+          for i in $(seq "$from" "$to"); do
+            part="$(printf '%03d' "$i")"
+            file="${base_name}.${part}"
+            sha="${file}.sha256"
+            expected="$(awk '{print tolower($1)}' "$sha")"
+            actual="$(sha256sum "$file" | awk '{print tolower($1)}')"
+            if [ "$expected" != "$actual" ]; then
+              echo "SHA256 mismatch for $file"
+              echo "expected=$expected"
+              echo "actual  =$actual"
+              exit 1
+            fi
+            echo "SHA256 OK: $file"
+          done
+
+          ls -la "${base_name}."* | head -n 30
+          ls -la "${VIRTIO_ISO_PATH}"
+
+      - name: Extract win10.qcow2 (from .001)
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="${PART_BASENAME}.001"
+          test -f "$first"
+          7z x -y "$first"
+          test -f "${QCOW2_FILE}"
+          ls -la "${QCOW2_FILE}"
+
+      - name: Download frpc (linux_amd64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${FRP_VERSION}"
+          tgz="frp_${ver}_linux_amd64.tar.gz"
+          url="https://github.com/fatedier/frp/releases/download/v${ver}/${tgz}"
+
+          curl -fL --retry 10 --retry-all-errors --retry-delay 2 -o "$tgz" "$url"
+          tar -xzf "$tgz"
+          dir="frp_${ver}_linux_amd64"
+          test -d "$dir"
+          cp -f "${dir}/frpc" ./frpc
+          chmod +x ./frpc
+          ./frpc -v
+
+      - name: Fetch frpc.ini (placeholder supported)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          url="${FRPC_INI_URL}"
+          if curl -fL --retry 5 --retry-all-errors --retry-delay 2 -o frpc.ini "$url"; then
+            echo "Downloaded frpc.ini from: $url"
+          else
+            echo "WARNING: Failed to download frpc.ini from: $url"
+            # 避免 heredoc 在 YAML block scalar 下缩进导致解析问题，这里用 printf 逐行生成
+            printf '%s\n' \
+              "[common]" \
+              "server_addr = 127.0.0.1" \
+              "server_port = 7000" \
+              "" \
+              "# 示例：把本机 VNC 5901 暴露出去（按你的 frps 配置修改）" \
+              "[vnc2]" \
+              "type = tcp" \
+              "local_ip = 127.0.0.1" \
+              "local_port = 5901" \
+              "remote_port = 5901" \
+              > frpc.ini
+          fi
+
+          echo "---- frpc.ini (first 200 lines) ----"
+          sed -n '1,200p' frpc.ini
+
+      - name: Start frpc in background (nohup) + show logs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 后台启动
+          nohup ./frpc -c ./frpc.ini > frpc.out.log 2> frpc.err.log < /dev/null &
+
+          sleep 2
+          if ! pgrep -f "./frpc -c ./frpc.ini" >/dev/null 2>&1; then
+            echo "frpc failed to start"
+            tail -n 200 frpc.out.log || true
+            tail -n 200 frpc.err.log || true
+            exit 1
+          fi
+
+          echo "frpc started. (pid(s): $(pgrep -f "./frpc -c ./frpc.ini" | tr '\n' ' '))"
+          echo "---- frpc.out.log (tail 80) ----"
+          tail -n 80 frpc.out.log || true
+          echo "---- frpc.err.log (tail 200) ----"
+          tail -n 200 frpc.err.log || true
+
+      - name: Run QEMU with VNC (foreground)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          qcow2="${QCOW2_FILE}"
+          vnc_display="${VNC_DISPLAY}"
+          mem="${VM_MEMORY_MB}"
+          smp="$(nproc)"
+          virtio_iso="${VIRTIO_ISO_PATH}"
+
+          test -f "$qcow2"
+          test -f "$virtio_iso"
+
+          echo "VNC TCP port should be: $((5900 + vnc_display))"
+          echo "Starting QEMU (this step runs in foreground)..."
+
+          # 提示：Ubuntu runner 通常不支持 KVM（/dev/kvm 不存在），因此用 tcg 作为兜底。
+          accel="tcg"
+          if [ -e /dev/kvm ]; then
+            accel="kvm"
+          fi
+          echo "Using accel: $accel"
+
+          # 启动 QEMU 前，打印 5901 是否被占用
+          ss -lntp | sed -n '1,120p' || true
+
+          qemu-system-x86_64 \
+            -accel "$accel" \
+            -cpu Westmere \
+            -smp "$smp" \
+            -machine q35,mem-merge=off \
+            -m "$mem" \
+            -drive "file=$qcow2,format=qcow2,if=ide,cache=writeback" \
+            -device qemu-xhci \
+            -device usb-kbd \
+            -device usb-tablet \
+            -drive "if=none,id=virtio,format=raw,media=cdrom,file=$virtio_iso" \
+            -device "usb-storage,drive=virtio" \
+            -net nic \
+            -net user \
+            -display none \
+            -vnc "0.0.0.0:${vnc_display}"
